@@ -1,0 +1,104 @@
+        $body["cmng_id"] = $CategoryIds
+    }
+
+    $pageHtml = (Invoke-GpwRequest -Uri $listEndpoint -Method "POST" -Body $body).Content
+    $regexOptions = [System.Text.RegularExpressions.RegexOptions]::Singleline -bor [System.Text.RegularExpressions.RegexOptions]::Multiline
+    $liRegex = [regex]::new('<li>.*?<span class="date">.*?</li>', $regexOptions)
+    $liMatches = $liRegex.Matches($pageHtml)
+
+    Write-Host ("Fetched offset {0}, length {1}" -f $offset, $pageHtml.Length)
+    if ($pageHtml.Length -gt 0) {
+        Write-Host ($pageHtml.Substring(0, [Math]::Min(200, $pageHtml.Length)))
+    }
+    Write-Host ("Fetched offset {0}, items {1}" -f $offset, $liMatches.Count)
+    if ($liMatches.Count -eq 0) {
+        break
+    }
+
+    foreach ($match in $liMatches) {
+        $liContent = $match.Value
+        $dateMatch = [regex]::Match($liContent, '\|\s*(\d{2}-\d{2}-\d{4})</span>')
+        if (-not $dateMatch.Success) { continue }
+        $publicationDate = [datetime]::ParseExact(
+            $dateMatch.Groups[1].Value,
+            "dd-MM-yyyy",
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+
+        $linkMatch = [regex]::Match($liContent, '<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        if (-not $linkMatch.Success) { continue }
+
+        $relativeHref = [System.Net.WebUtility]::HtmlDecode($linkMatch.Groups[1].Value)
+        $detailUrl = if ($relativeHref.StartsWith("http")) { $relativeHref } else { "$baseUri$relativeHref" }
+
+        $titleHtml = $linkMatch.Groups[2].Value
+        $titleText = [System.Net.WebUtility]::HtmlDecode(($titleHtml -replace '<[^>]+>', '')).Trim()
+
+        $detailHtml = (Invoke-GpwRequest -Uri $detailUrl).Content
+        Start-Sleep -Milliseconds 200
+        $paragraphRegex = [regex]::new('<p[^>]*>.*?</p>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        $paragraphMatches = $paragraphRegex.Matches($detailHtml)
+
+        $joinIndex = -1
+        $joinParagraphText = $null
+        for ($i = 0; $i -lt $paragraphMatches.Count; $i++) {
+        $paragraphHtml = $paragraphMatches[$i].Value
+        $plain = [System.Net.WebUtility]::HtmlDecode(($paragraphHtml -replace '<[^>]+>', ' '))
+        $plain = ($plain -replace '\s+', ' ').Trim()
+        if (-not $plain) { continue }
+        $normalized = (Remove-Diacritics $plain).ToLower()
+        if ($normalized -like '*programu wspierania*' -and $normalized -like '*przyst*') {
+            $joinIndex = $i
+            $joinParagraphText = $plain
+            break
+        }
+    }
+
+        if ($joinIndex -lt 0) { continue }
+
+        $normalizedJoin = (Remove-Diacritics $joinParagraphText).ToLower()
+        $effectiveMatch = [regex]::Match($normalizedJoin, '(?:z\s+dniem|w\s+dniu|od\s+dnia)\s+(\d{1,2})\s+([a-z]+)\s+(\d{4})')
+        $effectiveDate = $publicationDate
+        if ($effectiveMatch.Success) {
+            $day = [int]$effectiveMatch.Groups[1].Value
+            $monthName = $effectiveMatch.Groups[2].Value
+            if ($monthLookup.ContainsKey($monthName)) {
+                $month = $monthLookup[$monthName]
+                $effectiveDate = [datetime]::new([int]$effectiveMatch.Groups[3].Value, $month, $day)
+            }
+        }
+
+        $companies = @()
+        $paragraphHtml = $paragraphMatches[$joinIndex].Value
+        $start = $detailHtml.IndexOf($paragraphHtml)
+        if ($start -ge 0) {
+            $afterParagraph = $detailHtml.Substring($start + $paragraphHtml.Length)
+            $trimmedAfter = $afterParagraph.TrimStart()
+            if ($trimmedAfter.StartsWith("<ul", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $ulMatch = [regex]::Match($trimmedAfter, '<ul[^>]*>.*?</ul>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+                if ($ulMatch.Success) {
+                    $liCompanyMatches = [regex]::Matches($ulMatch.Value, '<li[^>]*>(.*?)</li>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+                    foreach ($liCompany in $liCompanyMatches) {
+                        $companyPlain = [System.Net.WebUtility]::HtmlDecode(($liCompany.Groups[1].Value -replace '<[^>]+>', ' '))
+                        $companyPlain = ($companyPlain -replace '\s+', ' ').Trim().Trim(",; ")
+                        if ($companyPlain -and $companyPlain -match '[A-Z]') {
+                            $companies += $companyPlain
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($companies.Count -eq 0) {
+            $colonIndex = $joinParagraphText.IndexOf(':')
+            if ($colonIndex -ge 0 -and $normalizedJoin -like '*spolk*:*') {
+                $listPart = $joinParagraphText.Substring($colonIndex + 1)
+                $nameMatches = [regex]::Matches($listPart, '(?:^|[,\s])([A-Za-z0-9][A-Za-z0-9\?\s\.\-&]*?(?:S\.A\.?|S\.E|SE|INC\.?))')
+                foreach ($nameMatch in $nameMatches) {
+                    $candidate = $nameMatch.Groups[1].Value.Trim()
+                    $candidate = ($candidate -replace '^(?:oraz|i)\s+', '').Trim(",; ")
+                    if ($candidate) {
+                        $companies += $candidate
+                    }
+                }
+            }

@@ -1,0 +1,41 @@
+    "Accept-Language" = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
+}
+
+function Invoke-GpwRequest {
+    param(
+        [string]$Uri,
+        [string]$Method = "GET",
+        $Body = $null,
+        [int]$MaxAttempts = 5
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            $parameters = @{
+                Uri             = $Uri
+                Method          = $Method
+                Headers         = $DefaultHeaders
+                UseBasicParsing = $true
+            }
+            if ($Method -eq "POST" -and $Body) {
+                $parameters.Body = $Body
+            }
+            return Invoke-WebRequest @parameters
+        } catch {
+            if ($attempt -ge $MaxAttempts) {
+                throw
+            }
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
+}
+
+function Remove-Diacritics {
+    param([string]$Text)
+    if (-not $Text) { return "" }
+    $normalized = $Text.Normalize([Text.NormalizationForm]::FormD)
+    $builder = New-Object System.Text.StringBuilder
+    foreach ($char in $normalized.ToCharArray()) {
+        if ([System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($char) -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) {
+            [void]$builder.Append($char)
+        }
