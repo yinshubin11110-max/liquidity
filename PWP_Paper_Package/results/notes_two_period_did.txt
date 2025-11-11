@@ -1,0 +1,2 @@
+amihud: coef=-0.000001, p_wild=0.5425, n_boot=1999
+cs_spread: coef=-0.062572, p_wild=0.5005, n_boot=1999

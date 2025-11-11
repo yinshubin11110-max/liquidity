@@ -1,0 +1,2 @@
+amihud: max |t| = 1.4108
+cs_spread: max |t| = 1.0909
