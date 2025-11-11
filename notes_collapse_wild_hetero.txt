@@ -1,0 +1,2 @@
+HighPrior: N_firms=10
+LowPrior: N_firms=10

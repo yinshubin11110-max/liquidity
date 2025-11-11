@@ -1,0 +1,2 @@
+"""GPW liquidity scraper package."""
+

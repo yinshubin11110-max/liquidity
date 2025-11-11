@@ -1,0 +1,2 @@
+amihud: pre F = 0.3684, p = 0.5510
+cs_spread: pre F = 2.8237, p = 0.1093
